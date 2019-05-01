@@ -43,16 +43,11 @@ def mnist_dataset():
 def main():
     # Training neural network
     param_name = "Activation / Neurons"
-    #param = ["logistic","relu"]
-    #param = list(itertools.product([1,2],
-    #                               ["relu","logistic"],
-    #                               [mn.MirNet,nn.NeuralNetwork],
-    #                               ["mnist"]))
-    param = list(itertools.product([1,2,3],
+    param = list(itertools.product([1],
                                    ["relu"],
                                    [mn.MirNet],
                                    ["mnist"],
-                                   [50,200]))
+                                   [50]))
 
     for p in param:
         network = p[2]
@@ -63,7 +58,7 @@ def main():
             X, Y, X_val, Y_val, loss_function, transformer = mnist_dataset()
 
         # Setting up model parameters
-        epochs = 1000  # number of iterations to exit the training loop
+        epochs = 100  # number of iterations to exit the training loop
         tolerance = 10**-4
         tests = 1
         rate_init = 10**-4

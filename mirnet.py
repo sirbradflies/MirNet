@@ -41,19 +41,26 @@ def expand_network(weights_curr, layer, neurons_new=10, verbose=False):
     if verbose:
         print("Expanding layer %i with %i neurons" % (layer, neurons_new))
     weights_new = copy.deepcopy(weights_curr)
+    neurons_list = [weights_new[0].shape[0]] + [w.shape[1] for w in weights_new]
 
     if layer > 0:
         # Not 1st layer, adding weights before new neurons
-        inbound = weights_new[layer-1].shape[0]
-        neurons_total = weights_new[layer-1].shape[1] + neurons_new
-        weights_add = np.random.uniform(-0.5, +0.5, (inbound, neurons_new)) \
-                      / np.sqrt(2 / neurons_total)
-        weights_new[layer-1] = np.hstack((weights_new[layer-1],weights_add))
+        inbound = neurons_list[layer-1]
+        if layer <= len(weights_curr):
+            neurons_total = neurons_list[layer] + neurons_new
+            weights_add = np.random.uniform(-0.5, +0.5, (inbound, neurons_new)) \
+                          / np.sqrt(2 / neurons_total)
+            weights_new[layer-1] = np.hstack((weights_new[layer-1],weights_add))
+        else: # New layer
+            neurons_total = neurons_new
+            weights_add = np.random.uniform(-0.5, +0.5, (inbound, neurons_new)) \
+                          / np.sqrt(2 / neurons_total)
+            weights_new += [weights_add]
 
     if layer < len(weights_curr)-1:
         # Not last layer, adding weights after new neurons
-        outbound = weights_new[layer].shape[1]
-        neurons_total = weights_new[layer].shape[0] + neurons_new
+        outbound = neurons_list[layer]
+        neurons_total = neurons_list[layer-1] + neurons_new
         weights_add = np.random.uniform(-0.5, +0.5, (neurons_new, outbound)) \
                       / np.sqrt(2 / neurons_total)
         weights_new[layer] = np.hstack((weights_new[layer], weights_add))
@@ -288,20 +295,20 @@ class MirNet(object):
                 if self.val_losses[-1] < min(self.val_losses[:-1]):  # Saving best current weights
                     self.weights = copy.deepcopy(weights_temp)
                     batch_size = min(int(batch_size / np.sqrt(1 - sgd_annealing)), sgd_init)
-                    #expand_layer = 1
+                    expand_layer = 1
                 else:
                     batch_size = max(int(batch_size * (1 - sgd_annealing)),1)
+                    weights_temp = expand_network(weights_temp, expand_layer, neurons, verbose=self.verbose)
+                    network_inc = [np.zeros(weights_temp[d].shape) for d in range(depth - 1)]
+                    expand_layer += 1
                 if self.early_stop(epoch, patience, tolerance, start_time, max_time, max_epochs):
                     break
-                """
+
                 if expand_layer > len(weights_temp):
                     neurons = 1
                 else:
                     neurons = weights_temp[expand_layer-1].shape[1]
-                weights_temp = expand_network(weights_temp, expand_layer, neurons, verbose=self.verbose)
-                network_inc = [np.zeros(weights_temp[d].shape) for d in range(depth-1)]
-                expand_layer += 1
-                """
+
         self.epochs += epoch
 
 
