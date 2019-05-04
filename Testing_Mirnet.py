@@ -6,7 +6,6 @@ from sklearn import preprocessing
 from sklearn import metrics as mt
 from mnist import MNIST
 import mirnet as mn
-import neuralnetwork as nn
 import itertools
 
 
@@ -37,36 +36,38 @@ def mnist_dataset():
     Y_val_labels = np.reshape(np.asanyarray(Y_val_labels), (len(Y_val_labels), 1))
     Y_val = binarizer.fit_transform(Y_val_labels)
     loss_function = mt.accuracy_score
-    return X[:1000], Y[:1000], X_val, Y_val, loss_function, binarizer
+    return X[:1000], Y[:1000], X_val[:1000], Y_val[:1000], loss_function, binarizer
 
 
 def main():
     # Training neural network
-    param_name = "Activation / Neurons"
-    param = list(itertools.product([1],
-                                   ["relu"],
-                                   [mn.MirNet],
-                                   ["mnist"],
-                                   [50]))
+    param_name = "SGD Annealing"
+    #param = list(itertools.product([1],
+    #                               [mn.MirNet],
+    #                               ["nmr"],
+    #                               [50]))
+    #param = [0.5,0.9,0.99,1.0]
+    param = [1.0]
 
     for p in param:
-        network = p[2]
-        dataset = p[3]
+        network = mn.MirNet
+        dataset = "mnist"
         if dataset == "nmr":
             X, Y, X_val, Y_val, loss_function, transformer = numerai_dataset()
         else:
             X, Y, X_val, Y_val, loss_function, transformer = mnist_dataset()
 
         # Setting up model parameters
-        epochs = 100  # number of iterations to exit the training loop
-        tolerance = 10**-4
+        epochs = 1000  # number of iterations to exit the training loop
+        tolerance = 10**-3
         tests = 1
         rate_init = 10**-4
-        patience = 10
+        patience = 100
         max_time = 60 * 60 * 1
-        depth = p[0]
-        function = p[1]
-        neurons = p[4]
+        depth = 1
+        type = "classifier"
+        neurons = 500
+        sgd_annealing = p
         layers = (neurons,) * depth
 
         print("%s: %s" % (param_name,p))
@@ -78,19 +79,20 @@ def main():
             start = time.clock()
 
             # Model training
-            net = network(hidden_layers=layers, activation=function, seed=seed, verbose=True)
+            net = network(hidden_layers=layers, type=type, seed=seed, verbose=True)
             print("%s %s Testing - %s" % (param_name, dataset, net))
             sgd = int(X.shape[0] / 10)
             net.fit(X, Y, sgd_init=sgd, tolerance=tolerance, max_epochs=epochs, max_time=max_time,
-                        patience=patience, rate_init=rate_init, X_val=X_val, Y_val=Y_val)
+                    patience=patience, rate=rate_init, X_test=X_val, Y_test=Y_val,
+                    sgd_annealing=sgd_annealing)
             runTime += (time.clock()-start)/tests
 
-            train_loss += np.pad(net.train_losses,(0,epochs-len(net.train_losses)),"edge") / tests
+            train_loss += np.pad(net.losses_train, (0, epochs - len(net.losses_train)), "edge") / tests
             Y_labels = transformer.inverse_transform(Y)
             train_prediction = transformer.inverse_transform(net.predict(X))
             best_train_loss += loss_function(Y_labels,train_prediction) / tests
 
-            val_loss += np.pad(net.val_losses, (0, epochs - len(net.val_losses)), "edge") / tests
+            val_loss += np.pad(net.losses_test, (0, epochs - len(net.losses_test)), "edge") / tests
             Y_val_labels = transformer.inverse_transform(Y_val)
             val_prediction = transformer.inverse_transform(net.predict(X_val))
             best_val_loss += loss_function(Y_val_labels,val_prediction) / tests

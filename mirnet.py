@@ -3,15 +3,14 @@
 """
 
 # TODO: Profile and optimize performance
-
 import time
 import copy
 import numpy as np
 import sklearn.metrics as mt
 from sklearn.preprocessing import MinMaxScaler
 
-__version__ = '0.7'
-UNCLAMPED_VALUE_DEFAULT = 0.0  # DONE: Tested 0 and 0.5
+__version__ = '0.9'
+UNCLAMPED_VALUE = 0.0  # DONE: Tested 0 and 0.5
 
 
 def relu(input_value, min=0, max=1):
@@ -19,7 +18,7 @@ def relu(input_value, min=0, max=1):
         Rectified Linear Unit activation function
         with option to clip values below and above a threshold
 
-        :param input: Numpy array with input values
+        :param input_value: Numpy array with input values
         :param min: Minimum value to clip (default 0)
         :param max: Maximum value to clip (default 1)
         :return: Numpy array
@@ -31,41 +30,10 @@ def logistic(input_value):
     """
         Sigmoid activation function
 
-        :param input: Numpy array with input values
+        :param input_value: Numpy array with input values
         :return: Numpy array
     """
     return 1 / (1 + np.exp(-input_value))
-
-
-def expand_network(weights_curr, layer, neurons_new=10, verbose=False):
-    if verbose:
-        print("Expanding layer %i with %i neurons" % (layer, neurons_new))
-    weights_new = copy.deepcopy(weights_curr)
-    neurons_list = [weights_new[0].shape[0]] + [w.shape[1] for w in weights_new]
-
-    if layer > 0:
-        # Not 1st layer, adding weights before new neurons
-        inbound = neurons_list[layer-1]
-        if layer <= len(weights_curr):
-            neurons_total = neurons_list[layer] + neurons_new
-            weights_add = np.random.uniform(-0.5, +0.5, (inbound, neurons_new)) \
-                          / np.sqrt(2 / neurons_total)
-            weights_new[layer-1] = np.hstack((weights_new[layer-1],weights_add))
-        else: # New layer
-            neurons_total = neurons_new
-            weights_add = np.random.uniform(-0.5, +0.5, (inbound, neurons_new)) \
-                          / np.sqrt(2 / neurons_total)
-            weights_new += [weights_add]
-
-    if layer < len(weights_curr)-1:
-        # Not last layer, adding weights after new neurons
-        outbound = neurons_list[layer]
-        neurons_total = neurons_list[layer-1] + neurons_new
-        weights_add = np.random.uniform(-0.5, +0.5, (neurons_new, outbound)) \
-                      / np.sqrt(2 / neurons_total)
-        weights_new[layer] = np.hstack((weights_new[layer], weights_add))
-
-    return weights_new
 
 
 class MirNet(object):
@@ -73,25 +41,31 @@ class MirNet(object):
         Definition of the main class
     """
 
-    def __init__(self, hidden_layers=(100,), activation="relu", seed=None, verbose=False):
+    def __init__(self, hidden_layers=(100,), type='classifier', seed=None, verbose=False):
         """
             Initialization function
 
             :param hidden_layers: Tuple describing the architecture and number of neurons present in each layer
-            :param activation: Activation function ('relu', 'logistic')
+            :param type: Type of network: 'classifier' (default), 'regressor'
             :param seed: Random seed to initialize the network
             :param verbose: Verbose mode
         """
-        self.seed = seed
-        np.random.seed(self.seed)
-        self.epochs = 0
-        self.loss = mt.mean_squared_error
-        self.hidden_layers = hidden_layers
-        self.activation = globals().copy()[activation]
-        self.weights = []
-        self.scaler = MinMaxScaler() # DONE: self.scaler = StandardScaler()
-        self.verbose = verbose
+        if type =="classifier":
+            self.loss = mt.log_loss
+            self.activation = relu
+        elif type == "regressor":
+            self.loss = mt.mean_squared_error
+            self.activation = relu
+        else:
+            raise Exception("Type %s not recognized" % type)
 
+        self.type = type
+        np.random.seed(seed)
+        self.epochs = 0
+        self.hidden_layers = hidden_layers
+        self.weights = []
+        self.scaler = MinMaxScaler() # TESTED: self.scaler = StandardScaler()
+        self.verbose = verbose
 
     def sample_values(self, input_value, weights):
         """
@@ -108,7 +82,7 @@ class MirNet(object):
             neurons_output = self.activation(neurons_input)
             pos_phase = pos_phase + [neurons_output]
 
-        # Negative phase, from last layer to input
+        # Negative phase, from last to input layer
         neg_phase = [pos_phase[-1]]
         for w in weights[::-1]:
             neurons_input = np.dot(neg_phase[0], np.transpose(w))
@@ -116,7 +90,6 @@ class MirNet(object):
             neg_phase = [neurons_output] + neg_phase
 
         return pos_phase, neg_phase
-
 
     def predict(self, input_array, weights=None):
         """
@@ -133,7 +106,7 @@ class MirNet(object):
         input_values = input_array.shape[1]
         total_values = weights[0].shape[0]
         samples = len(input_array)
-        padding = np.full((samples, total_values - input_values), UNCLAMPED_VALUE_DEFAULT)
+        padding = np.full((samples, total_values - input_values), UNCLAMPED_VALUE)
         X = self.scaler.transform(np.hstack((input_array, padding)))
         fneurons, bneurons = self.sample_values(X, weights)
 
@@ -141,7 +114,6 @@ class MirNet(object):
             return self.scaler.inverse_transform(bneurons[0])
         else:
             return self.scaler.inverse_transform(bneurons[0])[:, input_values:]  # Return only the fields not passed
-
 
     def early_stop(self, epoch, patience, tolerance, start_time, max_time, max_epochs):
         """
@@ -157,8 +129,8 @@ class MirNet(object):
             :return: Boolean on whether the training should stop
         """
         if epoch > patience:
-            best_old_solution = min(self.val_losses[:-patience])
-            best_current_solution = min(self.val_losses[-patience:])
+            best_old_solution = min(self.losses_test[:-patience])
+            best_current_solution = min(self.losses_test[-patience:])
             if best_current_solution > best_old_solution * (1 - tolerance):
                 if self.verbose: print(
                     "Early Stop! Validation did not improve by %f over last %i epochs"
@@ -177,147 +149,103 @@ class MirNet(object):
 
         return False
 
-
-    def fit(self, X, Y, sgd_init=100, rate_init=0.001, m=0.9,
-            X_val=None, Y_val=None, val_fraction=0.1, sgd_annealing=0.5,
+    def fit(self, X, Y=None, sgd_init=100, rate=0.001, m=0.9,
+            X_test=None, Y_test=None, test_fraction=0.1, sgd_annealing=0.5,
             tolerance=0.01, patience=10, max_epochs=100, max_time=0):
         """
             Uses a standard SKLearn "fit" interface with Input and Output values and feeds it
             into the train method where input and outputs are undifferentiated
 
             :param X: input values
-            :param Y: output values (targets)
+            :param Y: output or target values (if present, can also be included in X)
             :param sgd_init: starting value for mini batch_size size
-            :param rate_init: starting value for learning rate
+            :param rate: starting value for learning rate
             :param m: momentum
-            :param X_val: Input data for validation
-            :param Y_val: Output data for validation
-            :param val_fraction: Fraction of X to be used for validation (if X_validation is None)
-            :param sgd_annealing: Batch size reduction at each epoch where validation loss does not improve by tolerance
-            :param tolerance: Minimum improvement during <patience> epochs to avoid early stopping
-            :param patience: Number of epochs for which is required an improvement of <tolerance> to avoid early stopping
-            :param max_epochs: Maximum number of epochs for training
-            :param max_time: Maximum time (in seconds) for training
-        """
-        X_cons = np.hstack((X, Y))  # Consolidating input and target data
-        tgt_neurons = Y.shape[1]
-        if X_val is not None and Y_val is not None:
-            X_val_cons = np.hstack((X_val, Y_val))
-        else:
-            X_val_cons = None
-        self.fit_all(X_cons, sgd_init, rate_init, m, X_val_cons,
-                     val_fraction, tgt_neurons, sgd_annealing,
-                     tolerance, patience, max_epochs, max_time)
-
-    def fit_all(self, X, sgd_init=100, rate_init=0.001, m=0.9, X_val=None,
-                val_fraction=0.1, tgt_neurons=None, sgd_annealing=0.5,
-                tolerance=0.01, patience=10, max_epochs=100, max_time=0):
-        """
-            Train the network through a mix of CD 0.5 and Hebbian learning
-
-            :param X: data values (no distinction between "data" and "output" or "target" values)
-            :param sgd_init: starting value for mini batch_size size
-            :param rate_init: starting value for learning rate
-            :param m: momentum
-            :param X_val: Input data for validation (no distinction between "data" and "output" or "target" values)
-            :param val_fraction: Fraction of X to be used for validation
-            :param tgt_neurons: Neurons to be considered for target loss calculation
-            :param sgd_annealing: Batch size reduction at each epoch where validation loss does not improve by <tolerance>
+            :param X_test: Input batch for test
+            :param Y_test: Output batch for test
+            :param test_fraction: Fraction of X to be used for test (if X_test is None)
+            :param sgd_annealing: Batch size reduction at each epoch where test loss does not improve by tolerance
             :param tolerance: Minimum improvement during <patience> epochs to avoid early stopping
             :param patience: Number of epochs for which is required an improvement of <tolerance> to avoid early stopping
             :param max_epochs: Maximum number of epochs for training
             :param max_time: Maximum time (in seconds) for training
         """
         start_time = time.time()
-        nan_mask = np.isnan(X)
-        X_std = self.scaler.fit_transform(X)
+        XY = self.scaler.fit_transform(np.hstack((X, Y)))  # Consolidating input and target batch
+        XY[np.isnan(XY)] = UNCLAMPED_VALUE  # setting default value for unclamped inputs (Nan)
+        if Y is None:  # No explicit target, all neurons considered for loss calculation
+            targets = XY.shape[1]
+        else:
+            targets = Y.shape[1]
 
-        layers = (X_std.shape[1],) + self.hidden_layers
+        samples = len(XY)
+        shuffled_ix = np.random.permutation(samples)
+        if X_test is None:
+            test_samples = int(samples * test_fraction)
+            train = XY[shuffled_ix[test_samples:]]
+            test = XY[shuffled_ix[:test_samples]]
+        else:
+            train = XY
+            test = self.scaler.fit_transform(np.hstack((X_test, Y_test)))
+
+        layers = (XY.shape[1],) + self.hidden_layers
         depth = len(layers)
-        #  TODO: create dedicated function with also add feature
         if self.weights == []:
             for (start, end) in zip(layers[:-1], layers[1:]):  # Start - End start number
                 self.weights.append(np.random.uniform(-0.5, 0.5, (start, end))
                                     * np.sqrt(2 / start))  # HE et al. (2015) initialization
         weights_temp = copy.deepcopy(self.weights)
 
-        samples = len(X_std)
-        shuffled_ix = np.random.permutation(samples)
-        if X_val is None:
-            val_samples = int(samples * val_fraction)
-            X_val_std = X_std[shuffled_ix[:val_samples]]
-            X_train = X_std[shuffled_ix[val_samples:]]
-        else:
-            X_val_std = self.scaler.fit_transform(X_val)
-            X_train = X_std
-
-        if tgt_neurons is None: # TODO: Validate and Engineer Validation Neurons use
-            tgt_neurons = X_val_std.shape[1]
-
-        if self.verbose:
-            print("Target Neurons for validation loss: %i" % tgt_neurons)
-
-        batch_size = min(sgd_init, len(X_train))  # samples trained at the same time
-        rate = rate_init
-        network_inc = [np.zeros(weights_temp[d].shape) for d in range(depth-1)]
-        self.train_losses, self.val_losses = [], []
+        batch_size = min(sgd_init, len(train))  # samples trained at the same time
+        weights_update = [np.zeros(weights_temp[d].shape)
+                          for d in range(depth - 1)]
+        self.losses_train, self.losses_test = [], []
 
         for epoch in range(1, max_epochs + 1):  # training the network
-            X_std[nan_mask] = self.predict(X_std)[nan_mask]  # setting default value for unclamped inputs (Nan)
-            folds = len(X_train) // batch_size  # iterations per epoch
-
+            folds = len(train) // batch_size  # iterations per epoch
             for fold in range(folds):
-                data = X_train[fold * batch_size:(fold + 1) * batch_size]
-                fwd_neurons, bkw_neurons = self.sample_values(data, weights_temp)  # calculating current output
+                batch = train[fold * batch_size:(fold + 1) * batch_size]
+                fwd_values, bkw_values = self.sample_values(batch, weights_temp)  # calculating current output
 
                 # neural network back propagation
-                for level in range(0, depth - 1):
-                    pos_phase = np.dot(np.transpose(fwd_neurons[level]), fwd_neurons[level + 1])
-                    neg_phase = np.dot(np.transpose(bkw_neurons[level]), bkw_neurons[level + 1])
-                    update_matrix = rate * (pos_phase - neg_phase) / batch_size
-                    network_inc[level] = m * network_inc[level] + update_matrix
-                    weights_temp[level] += network_inc[level]
+                for layer in range(0, depth - 1):
+                    pos_phase = np.dot(np.transpose(fwd_values[layer]),
+                                       fwd_values[layer + 1])
+                    neg_phase = np.dot(np.transpose(bkw_values[layer]),
+                                       bkw_values[layer + 1])
+                    delta = rate * (pos_phase - neg_phase) / batch_size
+                    weights_update[layer] = m * weights_update[layer] + delta
+                    weights_temp[layer] += weights_update[layer]
 
-            # check training and validation progress after each epoch
-            train_prediction = self.predict(X_train, weights=weights_temp)
-            self.train_losses.append(self.loss(X_train, train_prediction))
-            # Validation loss is calculated
-            val_prediction = self.predict(X_val_std[:,:-tgt_neurons], weights=weights_temp)
-            self.val_losses.append(
-                self.loss(X_val_std[:, -tgt_neurons:], val_prediction)
-            )
+            # Check training and test losses after each epoch
+            train_prediction = self.predict(train[:, :-targets],
+                                            weights=weights_temp)
+            self.losses_train.append(self.loss(train[:, -targets:],
+                                               train_prediction))
+            val_prediction = self.predict(test[:, :-targets],
+                                          weights=weights_temp)
+            self.losses_test.append(self.loss(test[:, -targets:],
+                                              val_prediction))
 
             if self.verbose:
                 print("Epoch: %i\tTraining Loss: %.6f\tValidation Loss: %.6f\tLearning Rate: %.0e\tBatch Size: %i" \
-                      % (epoch, self.train_losses[-1], self.val_losses[-1], rate, batch_size))
+                      % (epoch, self.losses_train[-1], self.losses_test[-1], rate, batch_size))
 
             if epoch > 1:
-                if self.val_losses[-1] < min(self.val_losses[:-1]):  # Saving best current weights
+                if self.losses_test[-1] < min(self.losses_test[:-1]):  # Saving best current weights
                     self.weights = copy.deepcopy(weights_temp)
-                    batch_size = min(int(batch_size / np.sqrt(1 - sgd_annealing)), sgd_init)
-                    expand_layer = 1
-                else:
-                    batch_size = max(int(batch_size * (1 - sgd_annealing)),1)
-                    weights_temp = expand_network(weights_temp, expand_layer, neurons, verbose=self.verbose)
-                    network_inc = [np.zeros(weights_temp[d].shape) for d in range(depth - 1)]
-                    expand_layer += 1
                 if self.early_stop(epoch, patience, tolerance, start_time, max_time, max_epochs):
                     break
-
-                if expand_layer > len(weights_temp):
-                    neurons = 1
-                else:
-                    neurons = weights_temp[expand_layer-1].shape[1]
+                if self.losses_test[-1] > self.losses_test[-2] * (1 - tolerance):  # Improvement too small
+                    batch_size = max(int(batch_size * (1 - sgd_annealing)), 1)
 
         self.epochs += epoch
-
 
     def __str__(self):
         """
         Converts the class to its string representation
         :return: String representing the class
         """
-        return "MirNet_VE%s_AC%s_LA_%s_SE%s_EP%s" \
-               % (__version__, self.activation.__name__,
-                  ('%d_' * len(self.hidden_layers)) % tuple(self.hidden_layers),
-                  self.seed, self.epochs)
+        return "MirNet_VE%s_TY%s_EP%s_LA_%s" \
+               % (__version__, self.type, self.epochs,
+                  ('%d_' * len(self.hidden_layers)) % tuple(self.hidden_layers))
