@@ -1,2 +1,2 @@
 # MirNet
-Random experiments with Neural Networks and alike
+Various experiments with Neural Networks and alike
